@@ -1,0 +1,423 @@
+html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate Voice Whiteboard Workspace</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --panel-bg: #f5f5f5;
+            --border-color: #cccccc;
+            --grid-color: rgba(0, 0, 0, 0.06);
+            --line-color: rgba(0, 100, 255, 0.1);
+        }
+        [data-theme="dark"] {
+            --bg-color: #1e1e1e;
+            --text-color: #ffffff;
+            --panel-bg: #2d2d2d;
+            --border-color: #444444;
+            --grid-color: rgba(255, 255, 255, 0.05);
+            --line-color: rgba(255, 255, 255, 0.08);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+        body { background: var(--bg-color); color: var(--text-color); overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        
+        /* Toolbar */
+        #toolbar { background: var(--panel-bg); border-bottom: 2px solid var(--border-color); padding: 8px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 10; }
+        button, label { background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; gap: 4px; }
+        button:hover, label:hover { filter: brightness(0.9); }
+        .active { background: #0078d4; color: white !important; }
+        
+        /* Canvas Workspace */
+        #workspace-container { flex: 1; position: relative; overflow: auto; background: var(--bg-color); }
+        #canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+        
+        /* Background Templates */
+        .bg-grid { background-size: 30px 30px; background-image: linear-gradient(to right, var(--grid-color) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px); }
+        .bg-lined { background-size: 100% 30px; background-image: linear-gradient(var(--line-color) 1px, transparent 1px); background-attachment: local; }
+        
+        /* Interactive Elements */
+        .sticky-note { position: absolute; width: 200px; min-height: 150px; background: #fff9c4; color: #333; padding: 12px; border-radius: 4px; box-shadow: 2px 4px 10px rgba(0,0,0,0.2); cursor: move; resize: both; overflow: auto; z-index: 5; }
+        .sticky-note textarea { width: 100%; height: 80%; border: none; background: transparent; resize: none; font-size: 14px; outline: none; }
+        .sticky-close { position: absolute; top: 2px; right: 6px; cursor: pointer; font-weight: bold; color: #888; }
+        
+        .uploaded-screenshot { position: absolute; cursor: move; border: 1px dashed #888; z-index: 2; resize: both; overflow: hidden; }
+        .uploaded-screenshot img { width: 100%; height: 100%; pointer-events: none; }
+        .img-close { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: white; border-radius: 50%; width: 20px; height: 20px; text-align: center; line-height: 18px; cursor: pointer; font-size: 12px; }
+
+        /* Emoji Panel */
+        #emoji-panel { display: none; position: absolute; top: 50px; background: var(--panel-bg); border: 1px solid var(--border-color); padding: 10px; border-radius: 8px; max-width: 250px; grid-template-columns: repeat(5, 1fr); gap: 5px; z-index: 100; font-size: 20px; }
+        #emoji-panel span { cursor: pointer; text-align: center; }
+        #emoji-panel span:hover { transform: scale(1.2); }
+    </style>
+</head>
+<body>
+
+    <div id="toolbar">
+        <button id="btn-theme">🌙 Dark Mode</button>
+        <select id="bg-selector">
+            <option value="blank">Plain Board</option>
+            <option value="grid">Grid Pattern</option>
+            <option value="lined">Lined Paper</option>
+        </select>
+        
+        |
+        <button id="btn-draw" class="active">✏️ Draw</button>
+        <button id="btn-line">📏 Line</button>
+        <button id="btn-rect">🟦 Rect</button>
+        <button id="btn-circle">⭕ Circle</button>
+        <button id="btn-eraser">🧽 Eraser</button>
+        
+        <input type="color" id="color-picker" value="#000000">
+        <input type="range" id="size-picker" min="2" max="20" value="5" title="Stroke Thickness">
+        
+        |
+        <button id="btn-mic">🎙️ Start Voice Note</button>
+        <label for="screenshot-input">🖼️ Upload Screenshot</label>
+        <input type="file" id="screenshot-input" accept="image/*" style="display:none">
+        <button id="btn-table">📊 Add Table</button>
+        <button id="btn-emoji-trigger">😀 Emoji</button>
+        
+        |
+        <button id="btn-undo">↩️ Undo</button>
+        <button id="btn-redo">↪️ Redo</button>
+        <button id="btn-clear" style="color: red;">🗑️ Clear All</button>
+        <button id="btn-download" style="background: #22c55e; color: white;">💾 Download</button>
+    </div>
+
+    <div id="emoji-panel">
+        <span>😀</span><span>😂</span><span>👍</span><span>❤️</span><span>🔥</span>
+        <span>🚀</span><span>💡</span><span>⭐</span><span>✅</span><span>❌</span>
+        <span>📝</span><span>🎨</span><span>📌</span><span>💻</span><span>📐</span>
+    </div>
+
+    <div id="workspace-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('workspace-container');
+        
+        // Canvas Sizing
+        function resizeCanvas() {
+            canvas.width = Math.max(window.innerWidth, 2000);
+            canvas.height = Math.max(window.innerHeight, 2000);
+            restoreState();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // App States & Variables
+        let drawing = false;
+        let currentMode = 'draw'; // draw, line, rect, circle, eraser
+        let startX, startY;
+        let undoStack = [];
+        let redoStack = [];
+        
+        // Save history state
+        function saveState() {
+            if (undoStack.length > 20) undoStack.shift();
+            undoStack.push(canvas.toDataURL());
+            redoStack = [];
+        }
+        function restoreState() {
+            if(undoStack.length > 0) {
+                let img = new Image();
+                img.src = undoStack[undoStack.length - 1];
+                img.onload = () => {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+                }
+            }
+        }
+
+        // Tools Configurations
+        const colorPicker = document.getElementById('color-picker');
+        const sizePicker = document.getElementById('size-picker');
+        
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left + container.scrollLeft, y: e.clientY - rect.top + container.scrollTop };
+        }
+
+        // Drawing Event Listeners
+        canvas.addEventListener('mousedown', (e) => {
+            drawing = true;
+            const pos = getMousePos(e);
+            startX = pos.x;
+            startY = pos.y;
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            if (currentMode === 'draw' || currentMode === 'eraser') {
+                saveState();
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!drawing) return;
+            const pos = getMousePos(e);
+
+            ctx.lineWidth = sizePicker.value;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            if (currentMode === 'draw') {
+                ctx.strokeStyle = colorPicker.value;
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            } else if (currentMode === 'eraser') {
+                ctx.strokeStyle = document.documentElement.getAttribute('data-theme') === 'dark' ? '#1e1e1e' : '#ffffff';
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            } else {
+                // Shape previews require restoring previous state dynamically
+                restoreState();
+                setTimeout(() => {
+                    ctx.beginPath();
+                    ctx.lineWidth = sizePicker.value;
+                    ctx.strokeStyle = colorPicker.value;
+                    if (currentMode === 'line') {
+                        ctx.moveTo(startX, startY);
+                        ctx.lineTo(pos.x, pos.y);
+                    } else if (currentMode === 'rect') {
+                        ctx.rect(startX, startY, pos.x - startX, pos.y - startY);
+                    } else if (currentMode === 'circle') {
+                        let radius = Math.sqrt(Math.pow(pos.x - startX, 2) + Math.pow(pos.y - startY, 2));
+                        ctx.arc(startX, startY, radius, 0, 2 * Math.PI);
+                    }
+                    ctx.stroke();
+                }, 10);
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            if (drawing && (currentMode === 'line' || currentMode === 'rect' || currentMode === 'circle')) {
+                saveState();
+            }
+            drawing = false;
+        });
+
+        // Mode Toggles
+        const modes = {
+            'btn-draw': 'draw', 'btn-line': 'line', 'btn-rect': 'rect', 'btn-circle': 'circle', 'btn-eraser': 'eraser'
+        };
+        Object.keys(modes).forEach(id => {
+            document.getElementById(id).addEventListener('click', (e) => {
+                Object.keys(modes).forEach(k => document.getElementById(k).classList.remove('active'));
+                e.currentTarget.classList.add('active');
+                currentMode = modes[id];
+            });
+        });
+
+        // Background Template Swapper
+Use code with caution.
+document.getElementById('bg-selector').addEventListener('change', (e) => {
+container.className = '';
+if (e.target.value === 'grid') container.classList.add('bg-grid');
+if (e.target.value === 'lined') container.classList.add('bg-lined');
+});
+// Dark Mode Toggle
+document.getElementById('btn-theme').addEventListener('click', (e) => {
+const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+e.currentTarget.innerText = isDark ? '🌙 Dark Mode' : '☀️ Light Mode';
+});
+// Drag & Drop Element Helpers
+function makeDraggable(el) {
+let offsetX = 0, offsetY = 0, mouseX = 0, mouseY = 0;
+el.onmousedown = dragMouseDown;
+function dragMouseDown(e) {
+if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'TD' || e.target.classList.contains('img-close')) return;
+e.preventDefault();
+mouseX = e.clientX;
+mouseY = e.clientY;
+document.onmouseup = closeDragElement;
+document.onmousemove = elementDrag;
+}
+function elementDrag(e) {
+e.preventDefault();
+offsetX = mouseX - e.clientX;
+offsetY = mouseY - e.clientY;
+mouseX = e.clientX;
+mouseY = e.clientY;
+el.style.top = (el.offsetTop - offsetY) + "px";
+el.style.left = (el.offsetLeft - offsetX) + "px";
+}
+function closeDragElement() {
+document.onmouseup = null;
+document.onmousemove = null;
+}
+}
+// Voice Control (Speech Recognition)
+const micBtn = document.getElementById('btn-mic');
+let recognizing = false;
+let recognition;
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+recognition = new SpeechRecognition();
+recognition.continuous = true;
+recognition.interimResults = false;
+recognition.onresult = (event) => {
+let speechToText = event.results[event.results.length - 1][0].transcript;
+createStickyNote(speechToText);
+};
+recognition.onend = () => {
+recognizing = false;
+micBtn.innerText = "🎙️ Start Voice Note";
+micBtn.classList.remove('active');
+};
+}
+micBtn.addEventListener('click', () => {
+if (!recognition) {
+alert("Speech recognition is not supported in your current browser.");
+return;
+}
+if (recognizing) {
+recognition.stop();
+} else {
+recognition.start();
+recognizing = true;
+micBtn.innerText = "🛑 Stop Listening...";
+micBtn.classList.add('active');
+}
+});
+function createStickyNote(text = "") {
+const note = document.createElement('div');
+note.className = 'sticky-note';
+note.style.top = (container.scrollTop + 150) + 'px';
+note.style.left = (container.scrollLeft + 150) + 'px';
+note.innerHTML = <span class="sticky-close">×</span><textarea placeholder="Type or speak details...">${text}</textarea>;
+note.querySelector('.sticky-close').onclick = () => note.remove();
+container.appendChild(note);
+makeDraggable(note);
+}
+// Image / Screenshot Upload
+document.getElementById('screenshot-input').addEventListener('change', (e) => {
+const file = e.target.files[0];
+if (file) {
+const reader = new FileReader();
+reader.onload = function(event) {
+const wrap = document.createElement('div');
+wrap.className = 'uploaded-screenshot';
+wrap.style.top = (container.scrollTop + 100) + 'px';
+wrap.style.left = (container.scrollLeft + 100) + 'px';
+wrap.style.width = '300px';
+wrap.innerHTML = <span class="img-close">×</span><img src="${event.target.result}">;
+wrap.querySelector('.img-close').onclick = () => wrap.remove();
+container.appendChild(wrap);
+makeDraggable(wrap);
+};
+reader.readAsDataURL(file);
+}
+});
+// Custom Table Generator
+document.getElementById('btn-table').addEventListener('click', () => {
+const table = document.createElement('table');
+table.style.borderCollapse = 'collapse';
+table.style.background = 'var(--bg-color)';
+table.style.color = 'var(--text-color)';
+table.style.position = 'absolute';
+table.style.top = (container.scrollTop + 200) + 'px';
+table.style.left = (container.scrollLeft + 200) + 'px';
+table.style.zIndex = '4';
+table.border = "1";
+for(let i=0; i<3; i++) {
+let row = table.insertRow();
+for(let j=0; j<3; j++) {
+let cell = row.insertCell();
+cell.contentEditable = "true";
+cell.style.padding = "8px";
+cell.style.minWidth = "60px";
+cell.innerText = "Edit";
+}
+}
+// Add right-click to clear tables easily
+table.addEventListener('contextmenu', (e) => { e.preventDefault(); table.remove(); });
+container.appendChild(table);
+makeDraggable(table);
+});
+// Emoji Panel Management
+const emojiPanel = document.getElementById('emoji-panel');
+document.getElementById('btn-emoji-trigger').addEventListener('click', (e) => {
+emojiPanel.style.display = emojiPanel.style.display === 'grid' ? 'none' : 'grid';
+emojiPanel.style.left = e.clientX + 'px';
+});
+emojiPanel.addEventListener('click', (e) => {
+if(e.target.tagName === 'SPAN') {
+const note = document.createElement('div');
+note.style.position = 'absolute';
+note.style.fontSize = '40px';
+note.style.cursor = 'move';
+note.style.zIndex = '6';
+note.style.top = (container.scrollTop + 150) + 'px';
+note.style.left = (container.scrollLeft + 150) + 'px';
+note.innerText = e.target.innerText;
+note.addEventListener('contextmenu', (ev) => { ev.preventDefault(); note.remove(); });
+container.appendChild(note);
+makeDraggable(note);
+emojiPanel.style.display = 'none';
+}
+});
+// Undo & Redo Systems
+document.getElementById('btn-undo').addEventListener('click', () => {
+if (undoStack.length > 1) {
+redoStack.push(undoStack.pop());
+restoreState();
+} else if (undoStack.length === 1) {
+redoStack.push(undoStack.pop());
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+});
+document.getElementById('btn-redo').addEventListener('click', () => {
+if (redoStack.length > 0) {
+const state = redoStack.pop();
+undoStack.push(state);
+let img = new Image();
+img.src = state;
+img.onload = () => ctx.drawImage(img, 0, 0);
+}
+});
+// Clear All Action
+document.getElementById('btn-clear').addEventListener('click', () => {
+if(confirm("Are you sure you want to clear your drawings and elements?")) {
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+document.querySelectorAll('.sticky-note, .uploaded-screenshot, table').forEach(el => el.remove());
+undoStack = [];
+redoStack = [];
+}
+});
+// Canvas Img Flattening & Download
+document.getElementById('btn-download').addEventListener('click', () => {
+// Create temporary canvas to merge background grid + sketch drawings
+const tempCanvas = document.createElement('canvas');
+tempCanvas.width = window.innerWidth;
+tempCanvas.height = window.innerHeight;
+const tempCtx = tempCanvas.getContext('2d');
+// Draw background fill colors dynamically matching current layout theme
+tempCtx.fillStyle = document.documentElement.getAttribute('data-theme') === 'dark' ? '#1e1e1e' : '#ffffff';
+tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+// Flatten board details down
+tempCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+const link = document.createElement('a');
+link.download = 'my-whiteboard-export.png';
+link.href = tempCanvas.toDataURL();
+link.click();
+});
+// Run Initializers
+resizeCanvas();
+
+
+
+### 🌍 How to get your Link (Takes 30 Seconds)
+1. Copy the code block above.
+2. Go to **[://netlify.com](https://://netlify.com)**.
+3. Save the code into a file named `index.html` inside a folder, then drag and drop that folder onto the Netlify page. 
+4. It will instantly give you a **private, secure, live URL link** to your drawing app that works on your desktop computer, tablet, or smartphone!
+
+<FollowUp>
+Let me know if you run into any **trouble copying the code** or if you need help adding anything else to the script!
+</FollowUp>
